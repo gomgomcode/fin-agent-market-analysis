@@ -3,17 +3,18 @@ from dotenv import load_dotenv
 from dependency_injector.wiring import Provide, inject
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
-
 from api.server import APIBuilder
+
 from src.graph.nodes import (
     NaverNewsSearcherNode,
     ReportAssistantNode,
     ChosunRSSFeederNode,
+    RetrieveESGNode,
     WSJEconomyRSSFeederNode,
     WSJMarketRSSFeederNode,
     WeeklyReporterNode,
     USFinancialAnalyzerNode,
-    GoogleSearcherNode
+    GoogleSearcherNode,
 )
 from src.utils.logger import setup_logger
 from src.graph.builder import SupervisorGraphBuilder
@@ -21,6 +22,7 @@ from startup import Container
 from rich.console import Console
 
 from src.tasks.weekly_recap_scraper import scrape_jp_weekly_recap
+
 
 console = Console()
 load_dotenv(override=True)
@@ -75,6 +77,7 @@ def main(
 
     graph_builder.add_node(NaverNewsSearcherNode())
     graph_builder.add_node(GoogleSearcherNode())
+    graph_builder.add_node(RetrieveESGNode())
     graph_builder.add_node(ReportAssistantNode())
     graph_builder.add_node(ChosunRSSFeederNode())
     graph_builder.add_node(WSJEconomyRSSFeederNode())
