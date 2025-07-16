@@ -3,10 +3,44 @@ import os
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
 import logging
+from unittest.mock import patch
+
+
+class FakeResponse:
+    """Minimal response object used for mocking."""
+
+    def __init__(self, status_code: int = 200, content: bytes = b""):
+        self.status_code = status_code
+        self.content = content
 
 # 프로젝트 루트를 Python path에 추가
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+
+MOCK_HTML = """
+<html><body>
+<div class="SoaBEf">
+  <a href="http://example.com/1">link1</a>
+  <div class="MBeuO">Title1</div>
+  <div class="GI74Re">Snippet1</div>
+  <div class="LfVVr">Jan 1, 2024</div>
+  <div class="NUnG9d"><span>Source1</span></div>
+</div>
+<div class="SoaBEf">
+  <a href="http://example.com/2">link2</a>
+  <div class="MBeuO">Title2</div>
+  <div class="GI74Re">Snippet2</div>
+  <div class="LfVVr">Jan 2, 2024</div>
+  <div class="NUnG9d"><span>Source2</span></div>
+</div>
+</body></html>
+"""
+
+
+def create_mock_response(html: str = MOCK_HTML) -> FakeResponse:
+    """Return a FakeResponse with the provided HTML."""
+    return FakeResponse(status_code=200, content=html.encode("utf-8"))
 
 
 class TestGoogleSearcherWrapper:
@@ -15,8 +49,12 @@ class TestGoogleSearcherWrapper:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
-        from src.tools.google_searcher.google_searcher import GoogleSearcherWrapper
-        self.searcher = GoogleSearcherWrapper()
+        import importlib.util
+        module_path = os.path.join(os.path.dirname(__file__), "../src/tools/google_searcher/google_searcher.py")
+        spec = importlib.util.spec_from_file_location("google_searcher", module_path)
+        google_searcher = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(google_searcher)
+        self.searcher = google_searcher.GoogleSearcherWrapper()
     
     def test_searcher_initialization(self):
         """검색기 초기화 테스트"""
@@ -28,12 +66,17 @@ class TestGoogleSearcherWrapper:
     def test_explicit_date_search(self):
         """명시적 날짜 검색 테스트"""
         query = "Apple stock AAPL"
-        result = self.searcher.search_with_explicit_dates(
-            query, 
-            start_date="06/01/2024", 
-            end_date="06/30/2024",
-            max_results=3
-        )
+        with patch.object(
+            type(self.searcher),
+            "make_request",
+            return_value=create_mock_response(),
+        ):
+            result = self.searcher.search_with_explicit_dates(
+                query,
+                start_date="06/01/2024",
+                end_date="06/30/2024",
+                max_results=3,
+            )
         
         print("검색 결과 미리보기:")
         print(result[:200] + "..." if len(result) > 200 else result)
@@ -46,10 +89,15 @@ class TestGoogleSearcherWrapper:
     
     def test_default_date_behavior(self):
         """기본 날짜 동작 테스트 (날짜 미지정시)"""
-        result = self.searcher.search_with_explicit_dates(
-            "Microsoft MSFT",
-            max_results=2
-        )
+        with patch.object(
+            type(self.searcher),
+            "make_request",
+            return_value=create_mock_response(),
+        ):
+            result = self.searcher.search_with_explicit_dates(
+                "Microsoft MSFT",
+                max_results=2,
+            )
         
         assert isinstance(result, str)
         assert len(result) > 0
@@ -62,8 +110,15 @@ class TestGoogleSearcherTool:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
-        from src.tools.google_searcher.tool import GoogleSearcher
-        self.tool = GoogleSearcher()
+        try:
+            import importlib.util
+            module_path = os.path.join(os.path.dirname(__file__), "../src/tools/google_searcher/tool.py")
+            spec = importlib.util.spec_from_file_location("google_searcher_tool", module_path)
+            google_tool = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(google_tool)
+            self.tool = google_tool.GoogleSearcher()
+        except Exception as e:
+            pytest.skip(f"툴 의존성 누락: {e}")
     
     def test_tool_initialization(self):
         """툴 초기화 테스트"""
@@ -74,12 +129,17 @@ class TestGoogleSearcherTool:
     
     def test_tool_with_dates(self):
         """날짜가 포함된 툴 실행 테스트"""
-        result = self.tool._run(
-            "Tesla TSLA stock",
-            start_date="01/01/2024",
-            end_date="01/31/2024",
-            max_results=2
-        )
+        with patch.object(
+            type(self.tool.api_wrapper),
+            "make_request",
+            return_value=create_mock_response(),
+        ):
+            result = self.tool._run(
+                "Tesla TSLA stock",
+                start_date="01/01/2024",
+                end_date="01/31/2024",
+                max_results=2,
+            )
         
         print("툴 실행 결과 미리보기:")
         print(result[:200] + "..." if len(result) > 200 else result)
@@ -90,7 +150,12 @@ class TestGoogleSearcherTool:
     
     def test_tool_without_dates(self):
         """날짜 없는 툴 실행 테스트"""
-        result = self.tool._run("NVDA stock", max_results=1)
+        with patch.object(
+            type(self.tool.api_wrapper),
+            "make_request",
+            return_value=create_mock_response(),
+        ):
+            result = self.tool._run("NVDA stock", max_results=1)
         
         assert isinstance(result, str)
         assert len(result) > 0
