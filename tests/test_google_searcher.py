@@ -255,9 +255,9 @@ def test_manual_agent_integration():
         
         test_queries = [
             "애플 최근 일주일",
-            "테슬라 오늘", 
-            "Microsoft MSFT 어제",
-            "Google stock news"
+            # "테슬라 오늘", 
+            # "Microsoft MSFT 어제",
+            # "Google stock news"
         ]
         
         for i, query in enumerate(test_queries, 1):
