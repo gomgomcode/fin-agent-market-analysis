@@ -172,6 +172,8 @@ cython_debug/
 
 # vscode
 .vscode/
+# macOS
+.DS_Store
 
 # cursor
 .cursorrules
