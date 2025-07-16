@@ -1,46 +1,96 @@
-import pytest
 import os
+import sys
+import logging
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
-import logging
 from unittest.mock import patch
 
+import types
 
-class FakeResponse:
-    """Minimal response object used for mocking."""
-
-    def __init__(self, status_code: int = 200, content: bytes = b""):
-        self.status_code = status_code
-        self.content = content
+import pytest
 
 # 프로젝트 루트를 Python path에 추가
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+MOCK_NEWS_DATA = [
+    {
+        "link": "http://example.com/1",
+        "title": "Title1",
+        "snippet": "Snippet1",
+        "date": "Jan 1, 2024",
+        "source": "Source1",
+        "query": "",
+        "scraped_at": "2024-01-01T00:00:00",
+    },
+    {
+        "link": "http://example.com/2",
+        "title": "Title2",
+        "snippet": "Snippet2",
+        "date": "Jan 2, 2024",
+        "source": "Source2",
+        "query": "",
+        "scraped_at": "2024-01-02T00:00:00",
+    },
+]
 
-MOCK_HTML = """
-<html><body>
-<div class="SoaBEf">
-  <a href="http://example.com/1">link1</a>
-  <div class="MBeuO">Title1</div>
-  <div class="GI74Re">Snippet1</div>
-  <div class="LfVVr">Jan 1, 2024</div>
-  <div class="NUnG9d"><span>Source1</span></div>
-</div>
-<div class="SoaBEf">
-  <a href="http://example.com/2">link2</a>
-  <div class="MBeuO">Title2</div>
-  <div class="GI74Re">Snippet2</div>
-  <div class="LfVVr">Jan 2, 2024</div>
-  <div class="NUnG9d"><span>Source2</span></div>
-</div>
-</body></html>
-"""
+def ensure_stub_modules():
+    """Provide lightweight stubs for optional dependencies."""
+    if "bs4" not in sys.modules:
+        bs4 = types.ModuleType("bs4")
+        class BeautifulSoup:
+            def __init__(self, *args, **kwargs):
+                pass
+            def select(self, *args, **kwargs):
+                return []
+            def select_one(self, *args, **kwargs):
+                return None
+            def find(self, *args, **kwargs):
+                return None
+        bs4.BeautifulSoup = BeautifulSoup
+        sys.modules["bs4"] = bs4
 
+    if "requests" not in sys.modules:
+        requests = types.ModuleType("requests")
+        class Response:
+            pass
+        def get(*args, **kwargs):
+            return Response()
+        requests.get = get
+        requests.Response = Response
+        sys.modules["requests"] = requests
 
-def create_mock_response(html: str = MOCK_HTML) -> FakeResponse:
-    """Return a FakeResponse with the provided HTML."""
-    return FakeResponse(status_code=200, content=html.encode("utf-8"))
+    if "tenacity" not in sys.modules:
+        tenacity = types.ModuleType("tenacity")
+        def retry(*args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        tenacity.retry = retry
+        tenacity.stop_after_attempt = lambda *a, **k: None
+        tenacity.wait_exponential = lambda *a, **k: None
+        tenacity.retry_if_result = lambda *a, **k: None
+        sys.modules["tenacity"] = tenacity
+
+    if "langchain_core.tools" not in sys.modules:
+        lc = types.ModuleType("langchain_core")
+        tools = types.ModuleType("langchain_core.tools")
+        class BaseTool:
+            pass
+        tools.BaseTool = BaseTool
+        lc.tools = tools
+        sys.modules["langchain_core"] = lc
+        sys.modules["langchain_core.tools"] = tools
+
+def load_module(rel_path: str, name: str):
+    """Utility to load a module directly from a file path."""
+    import importlib.util
+
+    ensure_stub_modules()
+    module_path = os.path.join(os.path.dirname(__file__), rel_path)
+    spec = importlib.util.spec_from_file_location(name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestGoogleSearcherWrapper:
@@ -49,11 +99,7 @@ class TestGoogleSearcherWrapper:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
-        import importlib.util
-        module_path = os.path.join(os.path.dirname(__file__), "../src/tools/google_searcher/google_searcher.py")
-        spec = importlib.util.spec_from_file_location("google_searcher", module_path)
-        google_searcher = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(google_searcher)
+        google_searcher = load_module("../src/tools/google_searcher/google_searcher.py", "google_searcher")
         self.searcher = google_searcher.GoogleSearcherWrapper()
     
     def test_searcher_initialization(self):
@@ -66,11 +112,7 @@ class TestGoogleSearcherWrapper:
     def test_explicit_date_search(self):
         """명시적 날짜 검색 테스트"""
         query = "Apple stock AAPL"
-        with patch.object(
-            type(self.searcher),
-            "make_request",
-            return_value=create_mock_response(),
-        ):
+        with patch.object(type(self.searcher), "get_news_data", return_value=MOCK_NEWS_DATA):
             result = self.searcher.search_with_explicit_dates(
                 query,
                 start_date="06/01/2024",
@@ -80,27 +122,23 @@ class TestGoogleSearcherWrapper:
         
         print("검색 결과 미리보기:")
         print(result[:200] + "..." if len(result) > 200 else result)
-        
+
         # 결과 검증
         assert isinstance(result, str)
-        assert len(result) > 0
-        assert query in result or "Google News 검색 결과" in result
+        assert "Title1" in result
+        assert "Title2" in result
         print("✅ 명시적 날짜 검색 테스트 성공")
     
     def test_default_date_behavior(self):
         """기본 날짜 동작 테스트 (날짜 미지정시)"""
-        with patch.object(
-            type(self.searcher),
-            "make_request",
-            return_value=create_mock_response(),
-        ):
+        with patch.object(type(self.searcher), "get_news_data", return_value=MOCK_NEWS_DATA):
             result = self.searcher.search_with_explicit_dates(
                 "Microsoft MSFT",
                 max_results=2,
             )
         
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "Title1" in result
         print("✅ 기본 날짜 동작 테스트 성공")
 
 
@@ -111,11 +149,7 @@ class TestGoogleSearcherTool:
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
         try:
-            import importlib.util
-            module_path = os.path.join(os.path.dirname(__file__), "../src/tools/google_searcher/tool.py")
-            spec = importlib.util.spec_from_file_location("google_searcher_tool", module_path)
-            google_tool = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(google_tool)
+            google_tool = load_module("../src/tools/google_searcher/tool.py", "google_searcher_tool")
             self.tool = google_tool.GoogleSearcher()
         except Exception as e:
             pytest.skip(f"툴 의존성 누락: {e}")
@@ -129,11 +163,7 @@ class TestGoogleSearcherTool:
     
     def test_tool_with_dates(self):
         """날짜가 포함된 툴 실행 테스트"""
-        with patch.object(
-            type(self.tool.api_wrapper),
-            "make_request",
-            return_value=create_mock_response(),
-        ):
+        with patch.object(type(self.tool.api_wrapper), "get_news_data", return_value=MOCK_NEWS_DATA):
             result = self.tool._run(
                 "Tesla TSLA stock",
                 start_date="01/01/2024",
@@ -145,20 +175,16 @@ class TestGoogleSearcherTool:
         print(result[:200] + "..." if len(result) > 200 else result)
         
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "Title1" in result
         print("✅ 날짜 포함 툴 실행 테스트 성공")
     
     def test_tool_without_dates(self):
         """날짜 없는 툴 실행 테스트"""
-        with patch.object(
-            type(self.tool.api_wrapper),
-            "make_request",
-            return_value=create_mock_response(),
-        ):
+        with patch.object(type(self.tool.api_wrapper), "get_news_data", return_value=MOCK_NEWS_DATA):
             result = self.tool._run("NVDA stock", max_results=1)
-        
+
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "Title1" in result
         print("✅ 날짜 없는 툴 실행 테스트 성공")
 
 
