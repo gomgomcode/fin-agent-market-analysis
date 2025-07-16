@@ -5,12 +5,14 @@ from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
 from unittest.mock import patch
 
-import types
-
 import pytest
 
-# 프로젝트 루트를 Python path에 추가
+# 프로젝트 루트를 Python path에 추가 (이 코드는 유지하거나, pytest의 경로 탐색을 믿고 제거해도 좋습니다)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# src에서 직접 모듈과 클래스를 임포트합니다.
+from src.tools.google_searcher.google_searcher import GoogleSearcherWrapper
+from src.tools.google_searcher.tool import GoogleSearcher
 
 MOCK_NEWS_DATA = [
     {
@@ -33,65 +35,6 @@ MOCK_NEWS_DATA = [
     },
 ]
 
-def ensure_stub_modules():
-    """Provide lightweight stubs for optional dependencies."""
-    if "bs4" not in sys.modules:
-        bs4 = types.ModuleType("bs4")
-        class BeautifulSoup:
-            def __init__(self, *args, **kwargs):
-                pass
-            def select(self, *args, **kwargs):
-                return []
-            def select_one(self, *args, **kwargs):
-                return None
-            def find(self, *args, **kwargs):
-                return None
-        bs4.BeautifulSoup = BeautifulSoup
-        sys.modules["bs4"] = bs4
-
-    if "requests" not in sys.modules:
-        requests = types.ModuleType("requests")
-        class Response:
-            pass
-        def get(*args, **kwargs):
-            return Response()
-        requests.get = get
-        requests.Response = Response
-        sys.modules["requests"] = requests
-
-    if "tenacity" not in sys.modules:
-        tenacity = types.ModuleType("tenacity")
-        def retry(*args, **kwargs):
-            def decorator(f):
-                return f
-            return decorator
-        tenacity.retry = retry
-        tenacity.stop_after_attempt = lambda *a, **k: None
-        tenacity.wait_exponential = lambda *a, **k: None
-        tenacity.retry_if_result = lambda *a, **k: None
-        sys.modules["tenacity"] = tenacity
-
-    if "langchain_core.tools" not in sys.modules:
-        lc = types.ModuleType("langchain_core")
-        tools = types.ModuleType("langchain_core.tools")
-        class BaseTool:
-            pass
-        tools.BaseTool = BaseTool
-        lc.tools = tools
-        sys.modules["langchain_core"] = lc
-        sys.modules["langchain_core.tools"] = tools
-
-def load_module(rel_path: str, name: str):
-    """Utility to load a module directly from a file path."""
-    import importlib.util
-
-    ensure_stub_modules()
-    module_path = os.path.join(os.path.dirname(__file__), rel_path)
-    spec = importlib.util.spec_from_file_location(name, module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
 
 class TestGoogleSearcherWrapper:
     """GoogleSearcherWrapper 테스트"""
@@ -99,8 +42,8 @@ class TestGoogleSearcherWrapper:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
-        google_searcher = load_module("../src/tools/google_searcher/google_searcher.py", "google_searcher")
-        self.searcher = google_searcher.GoogleSearcherWrapper()
+        # 직접 임포트한 클래스를 사용합니다.
+        self.searcher = GoogleSearcherWrapper()
     
     def test_searcher_initialization(self):
         """검색기 초기화 테스트"""
@@ -149,9 +92,9 @@ class TestGoogleSearcherTool:
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
         try:
-            google_tool = load_module("../src/tools/google_searcher/tool.py", "google_searcher_tool")
-            self.tool = google_tool.GoogleSearcher()
-        except Exception as e:
+            # 직접 임포트한 클래스를 사용합니다.
+            self.tool = GoogleSearcher()
+        except ImportError as e: # 더 구체적인 예외를 잡는 것이 좋습니다.
             pytest.skip(f"툴 의존성 누락: {e}")
     
     def test_tool_initialization(self):
