@@ -1,12 +1,96 @@
-import pytest
 import os
+import sys
+import logging
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
-import logging
+from unittest.mock import patch
+
+import types
+
+import pytest
 
 # 프로젝트 루트를 Python path에 추가
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+MOCK_NEWS_DATA = [
+    {
+        "link": "http://example.com/1",
+        "title": "Title1",
+        "snippet": "Snippet1",
+        "date": "Jan 1, 2024",
+        "source": "Source1",
+        "query": "",
+        "scraped_at": "2024-01-01T00:00:00",
+    },
+    {
+        "link": "http://example.com/2",
+        "title": "Title2",
+        "snippet": "Snippet2",
+        "date": "Jan 2, 2024",
+        "source": "Source2",
+        "query": "",
+        "scraped_at": "2024-01-02T00:00:00",
+    },
+]
+
+def ensure_stub_modules():
+    """Provide lightweight stubs for optional dependencies."""
+    if "bs4" not in sys.modules:
+        bs4 = types.ModuleType("bs4")
+        class BeautifulSoup:
+            def __init__(self, *args, **kwargs):
+                pass
+            def select(self, *args, **kwargs):
+                return []
+            def select_one(self, *args, **kwargs):
+                return None
+            def find(self, *args, **kwargs):
+                return None
+        bs4.BeautifulSoup = BeautifulSoup
+        sys.modules["bs4"] = bs4
+
+    if "requests" not in sys.modules:
+        requests = types.ModuleType("requests")
+        class Response:
+            pass
+        def get(*args, **kwargs):
+            return Response()
+        requests.get = get
+        requests.Response = Response
+        sys.modules["requests"] = requests
+
+    if "tenacity" not in sys.modules:
+        tenacity = types.ModuleType("tenacity")
+        def retry(*args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        tenacity.retry = retry
+        tenacity.stop_after_attempt = lambda *a, **k: None
+        tenacity.wait_exponential = lambda *a, **k: None
+        tenacity.retry_if_result = lambda *a, **k: None
+        sys.modules["tenacity"] = tenacity
+
+    if "langchain_core.tools" not in sys.modules:
+        lc = types.ModuleType("langchain_core")
+        tools = types.ModuleType("langchain_core.tools")
+        class BaseTool:
+            pass
+        tools.BaseTool = BaseTool
+        lc.tools = tools
+        sys.modules["langchain_core"] = lc
+        sys.modules["langchain_core.tools"] = tools
+
+def load_module(rel_path: str, name: str):
+    """Utility to load a module directly from a file path."""
+    import importlib.util
+
+    ensure_stub_modules()
+    module_path = os.path.join(os.path.dirname(__file__), rel_path)
+    spec = importlib.util.spec_from_file_location(name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestGoogleSearcherWrapper:
@@ -15,8 +99,8 @@ class TestGoogleSearcherWrapper:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
-        from src.tools.google_searcher.google_searcher import GoogleSearcherWrapper
-        self.searcher = GoogleSearcherWrapper()
+        google_searcher = load_module("../src/tools/google_searcher/google_searcher.py", "google_searcher")
+        self.searcher = google_searcher.GoogleSearcherWrapper()
     
     def test_searcher_initialization(self):
         """검색기 초기화 테스트"""
@@ -28,31 +112,33 @@ class TestGoogleSearcherWrapper:
     def test_explicit_date_search(self):
         """명시적 날짜 검색 테스트"""
         query = "Apple stock AAPL"
-        result = self.searcher.search_with_explicit_dates(
-            query, 
-            start_date="06/01/2024", 
-            end_date="06/30/2024",
-            max_results=3
-        )
+        with patch.object(type(self.searcher), "get_news_data", return_value=MOCK_NEWS_DATA):
+            result = self.searcher.search_with_explicit_dates(
+                query,
+                start_date="06/01/2024",
+                end_date="06/30/2024",
+                max_results=3,
+            )
         
         print("검색 결과 미리보기:")
         print(result[:200] + "..." if len(result) > 200 else result)
-        
+
         # 결과 검증
         assert isinstance(result, str)
-        assert len(result) > 0
-        assert query in result or "Google News 검색 결과" in result
+        assert "Title1" in result
+        assert "Title2" in result
         print("✅ 명시적 날짜 검색 테스트 성공")
     
     def test_default_date_behavior(self):
         """기본 날짜 동작 테스트 (날짜 미지정시)"""
-        result = self.searcher.search_with_explicit_dates(
-            "Microsoft MSFT",
-            max_results=2
-        )
+        with patch.object(type(self.searcher), "get_news_data", return_value=MOCK_NEWS_DATA):
+            result = self.searcher.search_with_explicit_dates(
+                "Microsoft MSFT",
+                max_results=2,
+            )
         
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "Title1" in result
         print("✅ 기본 날짜 동작 테스트 성공")
 
 
@@ -62,8 +148,11 @@ class TestGoogleSearcherTool:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """각 테스트 메서드 실행 전 실행"""
-        from src.tools.google_searcher.tool import GoogleSearcher
-        self.tool = GoogleSearcher()
+        try:
+            google_tool = load_module("../src/tools/google_searcher/tool.py", "google_searcher_tool")
+            self.tool = google_tool.GoogleSearcher()
+        except Exception as e:
+            pytest.skip(f"툴 의존성 누락: {e}")
     
     def test_tool_initialization(self):
         """툴 초기화 테스트"""
@@ -74,26 +163,28 @@ class TestGoogleSearcherTool:
     
     def test_tool_with_dates(self):
         """날짜가 포함된 툴 실행 테스트"""
-        result = self.tool._run(
-            "Tesla TSLA stock",
-            start_date="01/01/2024",
-            end_date="01/31/2024",
-            max_results=2
-        )
+        with patch.object(type(self.tool.api_wrapper), "get_news_data", return_value=MOCK_NEWS_DATA):
+            result = self.tool._run(
+                "Tesla TSLA stock",
+                start_date="01/01/2024",
+                end_date="01/31/2024",
+                max_results=2,
+            )
         
         print("툴 실행 결과 미리보기:")
         print(result[:200] + "..." if len(result) > 200 else result)
         
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "Title1" in result
         print("✅ 날짜 포함 툴 실행 테스트 성공")
     
     def test_tool_without_dates(self):
         """날짜 없는 툴 실행 테스트"""
-        result = self.tool._run("NVDA stock", max_results=1)
-        
+        with patch.object(type(self.tool.api_wrapper), "get_news_data", return_value=MOCK_NEWS_DATA):
+            result = self.tool._run("NVDA stock", max_results=1)
+
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "Title1" in result
         print("✅ 날짜 없는 툴 실행 테스트 성공")
 
 
