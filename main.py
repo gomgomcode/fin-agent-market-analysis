@@ -13,14 +13,12 @@ from src.graph.nodes import (
     ReportAssistantNode,
     ChosunRSSFeederNode,
     RetrieveESGNode,
-    # WeeklyReporterNode,
     WSJEconomyRSSFeederNode,
     WSJMarketRSSFeederNode,
     USFinancialAnalyzerNode,
-    # GoogleSearchAPINode,  # 삭제됨 - google_searcher로 대체
     GoogleSearcherNode,
     CompanyFactsAnalyzerNode,
-    # StockInfoNode,
+    EdgarReportNode,  # 추가
 )
 from src.utils.logger import setup_logger
 from src.graph.builder import SupervisorGraphBuilder
@@ -84,16 +82,15 @@ def main(
     """
 
     graph_builder.add_node(NaverNewsSearcherNode())
-    graph_builder.add_node(GoogleSearcherNode())    # 검색 기반 (웹 스크래핑)
-    # graph_builder.add_node(GoogleSearchAPINode())  # 삭제됨 - API 기반, google_searcher로 대체
+    graph_builder.add_node(GoogleSearcherNode())
     graph_builder.add_node(RetrieveESGNode())
     graph_builder.add_node(ReportAssistantNode())
-    # graph_builder.add_node(WeeklyReporterNode())
     graph_builder.add_node(ChosunRSSFeederNode())
     graph_builder.add_node(WSJEconomyRSSFeederNode())
     graph_builder.add_node(WSJMarketRSSFeederNode())
-    # graph_builder.add_node(StockInfoNode())  # TODO: 종합 처리 기능 적용 시 주석 해제
     graph_builder.add_node(CompanyFactsAnalyzerNode())
+    graph_builder.add_node(USFinancialAnalyzerNode())
+    graph_builder.add_node(EdgarReportNode())  # 추가
 
     # 한투 API 분석 에이전트 노드 주석 처리 (미국 주식 노드로 대체)
     # graph_builder.add_node(HantooFinancialAnalyzerNode())
